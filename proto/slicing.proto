@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+option go_package = "slicer-api/proto";
+
+package slicer;
+
+service Slicer {
+  rpc Slice (stream SliceRequest) returns (stream SliceResponse);
+}
+
+message SliceRequest {
+  bytes file_data = 1;
+}
+
+message SliceResponse {
+  bytes sliced_data = 1;
+  string status = 2;
+}
