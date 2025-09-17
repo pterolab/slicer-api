@@ -17,10 +17,12 @@ import (
 
 // FilamentInfo represents the filament usage data extracted from G-code
 type FilamentInfo struct {
-	FilamentUsedMM  []float64 `json:"filament_used_mm"`
-	FilamentUsedCM3 []float64 `json:"filament_used_cm3"`
-	FilamentUsedG   []float64 `json:"filament_used_g"`
-	FilamentCost    []float64 `json:"filament_cost"`
+	FilamentUsedMM  float64 `json:"filament_used_mm"`
+	FilamentUsedCM3 float64 `json:"filament_used_cm3"`
+	FilamentUsedG   float64 `json:"filament_used_g"`
+	FilamentCost    float64 `json:"filament_cost"`
+	FilamantModelTime string    `json:"model_printing_time,omitempty"`
+	FilamantTotalTime string    `json:"total_estimated_time,omitempty"`
 }
 
 // parseFloatArray parses a comma-separated string of floats and returns a slice
@@ -44,7 +46,13 @@ func extractFilamentInfo(filePath string) (*FilamentInfo, error) {
 	}
 	defer file.Close()
 
+	type TimeInfo struct {
+		ModelPrintingTime      string `json:"model_printing_time,omitempty"`
+		TotalEstimatedTime     string `json:"total_estimated_time,omitempty"`
+	}
+
 	info := &FilamentInfo{}
+	timeInfo := &TimeInfo{}
 	scanner := bufio.NewScanner(file)
 
 	// Regular expressions to match the filament info lines
@@ -53,19 +61,37 @@ func extractFilamentInfo(filePath string) (*FilamentInfo, error) {
 		"cm3":  regexp.MustCompile(`; filament used \[cm3\] = (.+)`),
 		"g":    regexp.MustCompile(`; filament used \[g\] = (.+)`),
 		"cost": regexp.MustCompile(`; filament cost = (.+)`),
+		"model_time": regexp.MustCompile(`; model printing time: ([\dhms\s]+)`),
+		"total_time": regexp.MustCompile(`; total estimated time: ([\dhms\s]+)`),
 	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		if match := regexPatterns["mm"].FindStringSubmatch(line); len(match) > 1 {
-			info.FilamentUsedMM = parseFloatArray(match[1])
+			arr := parseFloatArray(match[1])
+			if len(arr) > 0 {
+				info.FilamentUsedMM = arr[0]
+			}
 		} else if match := regexPatterns["cm3"].FindStringSubmatch(line); len(match) > 1 {
-			info.FilamentUsedCM3 = parseFloatArray(match[1])
+			arr := parseFloatArray(match[1])
+			if len(arr) > 0 {
+				info.FilamentUsedCM3 = arr[0]
+			}
 		} else if match := regexPatterns["g"].FindStringSubmatch(line); len(match) > 1 {
-			info.FilamentUsedG = parseFloatArray(match[1])
+			arr := parseFloatArray(match[1])
+			if len(arr) > 0 {
+				info.FilamentUsedG = arr[0]
+			}
 		} else if match := regexPatterns["cost"].FindStringSubmatch(line); len(match) > 1 {
-			info.FilamentCost = parseFloatArray(match[1])
+			arr := parseFloatArray(match[1])
+			if len(arr) > 0 {
+				info.FilamentCost = arr[0]
+			}
+		} else if match := regexPatterns["model_time"].FindStringSubmatch(line); len(match) > 1 {
+			timeInfo.ModelPrintingTime = strings.TrimSpace(match[1])
+		} else if match := regexPatterns["total_time"].FindStringSubmatch(line); len(match) > 1 {
+			timeInfo.TotalEstimatedTime = strings.TrimSpace(match[1])
 		}
 	}
 
@@ -73,7 +99,23 @@ func extractFilamentInfo(filePath string) (*FilamentInfo, error) {
 		return nil, fmt.Errorf("error reading file: %v", err)
 	}
 
-	return info, nil
+	// Merge timeInfo into FilamentInfo by marshaling/unmarshaling
+	// Or, you can extend FilamentInfo to include these fields directly.
+	// Here, we marshal both and merge into a map for flexibility.
+	resultMap := make(map[string]interface{})
+	b1, _ := json.Marshal(info)
+	b2, _ := json.Marshal(timeInfo)
+	json.Unmarshal(b1, &resultMap)
+	json.Unmarshal(b2, &resultMap)
+
+	finalBytes, _ := json.Marshal(resultMap)
+	finalInfo := &FilamentInfo{}
+	json.Unmarshal(finalBytes, finalInfo)
+
+	// Attach time fields as needed (if you want them as separate fields, extend FilamentInfo struct)
+	// Or, return resultMap instead of FilamentInfo if you want a generic response.
+
+	return finalInfo, nil
 }
 
 func RunHTTP(addr string) error {
@@ -166,7 +208,8 @@ func RunHTTP(addr string) error {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		
+	
+
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusBadRequest)
@@ -190,22 +233,27 @@ func RunHTTP(addr string) error {
 			return
 		}
 		
-		// Extract filament information
+		// Extract filament information and times
 		filamentInfo, err := extractFilamentInfo(outFilePath)
 		if err != nil {
 			log.Printf("Warning: failed to extract filament info: %v", err)
 			// Continue serving the file even if analysis fails
 		}
 
+		// Unmarshal again to get time fields from the result map
+		var resultMap map[string]interface{}
+		b, _ := json.Marshal(filamentInfo)
+		json.Unmarshal(b, &resultMap)
+
 		// Create response structure
 		type SliceResponse struct {
-			FilamentInfo *FilamentInfo `json:"filament_info,omitempty"`
-			Message      string        `json:"message"`
+			FilamentInfo        *FilamentInfo `json:"filament_info,omitempty"`
+			Message             string        `json:"message"`
 		}
 
 		response := SliceResponse{
-			FilamentInfo: filamentInfo,
-			Message:      "Slicing completed successfully",
+			FilamentInfo:       filamentInfo,
+			Message:            "Slicing completed successfully",
 		}
 
 		w.Header().Set("Content-Type", "application/json")
