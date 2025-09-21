@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slicer-api/slicer"
 	"strconv"
@@ -39,8 +40,8 @@ func parseFloatArray(s string) []float64 {
 }
 
 // extractFilamentInfo reads a G-code file and extracts filament usage information
-func extractFilamentInfo(filePath string) (*FilamentInfo, error) {
-	file, err := os.Open(filePath)
+func extractFilamentInfo(sliceResponse *slicer.SlicingResponse) (*FilamentInfo, error) {
+	file, err := os.Open(sliceResponse.OutputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
 	}
@@ -112,9 +113,8 @@ func extractFilamentInfo(filePath string) (*FilamentInfo, error) {
 	finalInfo := &FilamentInfo{}
 	json.Unmarshal(finalBytes, finalInfo)
 
-	// Attach time fields as needed (if you want them as separate fields, extend FilamentInfo struct)
-	// Or, return resultMap instead of FilamentInfo if you want a generic response.
-
+	fmt.Printf("Deleting dir %s after extracting info\n", sliceResponse.OutputDir)
+	os.RemoveAll(sliceResponse.OutputDir)
 	return finalInfo, nil
 }
 
@@ -145,13 +145,13 @@ func RunHTTP(addr string) error {
 			return
 		}
 		
-		outFilePath, sErr := slicer.Slice(data, app)
+		sliceResponse, sErr := slicer.Slice(data, app)
 		if sErr != nil {
 			http.Error(w, fmt.Sprintf("slicing failed: %v", sErr), http.StatusInternalServerError)
 			return
 		}
 		
-		file, err := os.Open(outFilePath)
+		file, err := os.Open(sliceResponse.OutputPath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("open output file error: %v", err), http.StatusInternalServerError)
 			return
@@ -160,7 +160,7 @@ func RunHTTP(addr string) error {
 		// Uncomment these lines if you want to clean up temporary files
 		// defer os.RemoveAll(filepath.Dir(outFilePath))
 		
-		fmt.Println("Output file: ", outFilePath)
+		fmt.Println("Output file: ", sliceResponse.OutputPath)
 		w.Header().Set("Content-Type", "application/gcode")
 		w.Header().Set("Content-Disposition", "attachment; filename=plate_1.gcode")
 		http.ServeContent(w, r, "plate_1.gcode", time.Now(), file)
@@ -186,7 +186,11 @@ func RunHTTP(addr string) error {
 		}
 
 		// Extract filament information from the G-code file
-		filamentInfo, err := extractFilamentInfo(filePath)
+		sliceResponse := &slicer.SlicingResponse{
+			OutputPath: filePath,
+			OutputDir:  filepath.Dir(filePath),
+		}
+		filamentInfo, err := extractFilamentInfo(sliceResponse)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to extract filament info: %v", err), http.StatusInternalServerError)
 			return
@@ -209,7 +213,6 @@ func RunHTTP(addr string) error {
 			return
 		}
 	
-
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusBadRequest)
@@ -227,14 +230,14 @@ func RunHTTP(addr string) error {
 			return
 		}
 		
-		outFilePath, sErr := slicer.Slice(data, app)
+		sliceResponse, sErr := slicer.Slice(data, app)
 		if sErr != nil {
 			http.Error(w, fmt.Sprintf("slicing failed: %v", sErr), http.StatusInternalServerError)
 			return
 		}
 		
 		// Extract filament information and times
-		filamentInfo, err := extractFilamentInfo(outFilePath)
+		filamentInfo, err := extractFilamentInfo(sliceResponse)
 		if err != nil {
 			log.Printf("Warning: failed to extract filament info: %v", err)
 			// Continue serving the file even if analysis fails

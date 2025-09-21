@@ -48,17 +48,17 @@ func (s *server) Slice(stream slicer_grpc.Slicer_SliceServer) error {
 		return status.Error(codes.FailedPrecondition, "SLICER_APP is not set")
 	}
 
-	outFilePath, err := slicer.Slice(in.Bytes(), app)
+	sliceResponse, err := slicer.Slice(in.Bytes(), app)
 	if err != nil {
 		return status.Errorf(codes.Internal, "slicing failed: %v", err)
 	}
 
-	file, err := os.Open(outFilePath)
+	file, err := os.Open(sliceResponse.OutputPath)
 	if err != nil {
 		return status.Errorf(codes.Internal, "open output file error: %v", err)
 	}
 	defer file.Close()
-	defer os.RemoveAll(filepath.Dir(outFilePath))
+	defer os.RemoveAll(filepath.Dir(sliceResponse.OutputPath))
 
 	const bufferSize = 1024 * 1024
 	buffer := make([]byte, bufferSize)

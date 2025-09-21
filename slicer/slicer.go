@@ -10,15 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
-type SlicingResult struct {
-	ErrorString string `json:"error_string"`
-	PlateIndex  int    `json:"plate_index"`
-	ReturnCode  int    `json:"return_code"`
-}
 
-type SlicingError struct {
-	Result SlicingResult
-}
+type (
+	SlicingError struct {
+		Result SlicingResult
+	}
+
+	SlicingResult struct {
+		ErrorString string `json:"error_string"`
+		PlateIndex  int    `json:"plate_index"`
+		ReturnCode  int    `json:"return_code"`
+	}
+
+	SlicingResponse struct {
+		OutputPath string `json:"output_path"`
+		OutputDir string `json:"output_dir"`
+	}
+)
 
 func (e *SlicingError) Error() string {
 	return fmt.Sprintf("%s (Plate: %d, Code: %d)", e.Result.ErrorString, e.Result.PlateIndex, e.Result.ReturnCode)
@@ -30,26 +38,26 @@ func (e *SlicingError) Error() string {
 // The error may be of type SlicingError.
 // It will automatically create a temporary directory for input and output files.
 // The caller is responsible for reading the file and cleaning up the temporary directory.
-func Slice(file []byte, app string) (string, error) {
+func Slice(file []byte, app string) (*SlicingResponse, error) {
 	// Create a temporary directory to store input and output files
 	dir := uuid.New().String()
 	errDir := os.Mkdir(dir, 0777)
 	if errDir != nil {
-		return "", fmt.Errorf("error creating temp dir: %w", errDir)
+		return nil, fmt.Errorf("error creating temp dir: %w", errDir)
 	}
 
 	// Use absolute path for better reliability
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("error getting absolute path: %w", err)
+		return nil, fmt.Errorf("error getting absolute path: %w", err)
 	}
 
 	inputPath := filepath.Join(absDir, "input.3mf")
 	errFile := os.WriteFile(inputPath, file, 0644) // Changed from 0444 to 0644
 	if errFile != nil {
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("error writing input file: %w", errFile)
+		return nil, fmt.Errorf("error writing input file: %w", errFile)
 	}
 
 	// Prepare the args to run the slicer
@@ -76,7 +84,7 @@ func Slice(file []byte, app string) (string, error) {
 		// Check if the slicer executable exists and is executable
 		if _, statErr := os.Stat(app); os.IsNotExist(statErr) {
 			os.RemoveAll(dir)
-			return "", fmt.Errorf("slicer executable not found: %s", app)
+			return nil, fmt.Errorf("slicer executable not found: %s", app)
 		}
 		
 		// Read the result file if it exists to provide more information about the error
@@ -88,24 +96,28 @@ func Slice(file []byte, app string) (string, error) {
 				var result SlicingResult
 				if jsonErr := json.NewDecoder(f).Decode(&result); jsonErr == nil {
 					os.RemoveAll(dir)
-					return "", &SlicingError{Result: result}
+					return nil, &SlicingError{Result: result}
 				}
 			}
 		}
 		
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("error running command (exit code: %v): %s", err, string(output))
+		return nil, fmt.Errorf("error running command (exit code: %v): %s", err, string(output))
 	}
 
 	// Verify the output file was created
 	outputPath := filepath.Join(absDir, "plate_1.gcode")
 	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("output file was not created: %s", outputPath)
+		return nil, fmt.Errorf("output file was not created: %s", outputPath)
 	}
 
 	fmt.Printf("Command succeeded. Output: %s\n", string(output))
-	return outputPath, nil
+	response := &SlicingResponse{
+		OutputPath: outputPath,
+		OutputDir: absDir,
+	}
+	return response, nil
 }
 
 // Helper function to check if slicer is available and get version info
